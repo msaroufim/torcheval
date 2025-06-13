@@ -5,14 +5,7 @@ import click
 import pandas as pd 
 from contextlib import contextmanager
 import triton
-
-
-@dataclass
-class OperatorTestCase:
-    op: str
-    overload: str
-    correctness_tests: list[Any]
-    performance_tests: list[Any]
+from torch.testing._internal.common_methods_invocations import op_db
 
 
 class Backend:
@@ -29,38 +22,31 @@ class AtenBackend(Backend):
         yield
 
 
-def run_correctness_test(backend: Backend, op: OperatorTestCase, testcase: str):
-    args, kwargs = eval(testcase)
-    op_fn = getattr(getattr(torch.ops.aten, op.op), op.overload)
-    ref = op_fn(*args, **kwargs)
+def allclose(a, b):
+    if isinstance(a, torch.Tensor):
+        return torch.allclose(a, b)
+    if isinstance(a, (list, tuple)):
+        return all(allclose(x, y) for x, y in zip(a, b))
+    return a == b
+
+def run_correctness_test(backend: Backend, op, input):
+    ref = op.op(input.input, *input.args, **input.kwargs)
     with backend.activate():
-        res = op_fn(*args, **kwargs)
-    return torch.allclose(ref, res)
+        res = op.op(input.input, *input.args, **input.kwargs)
+    return allclose(ref, res)
 
 
-def run_performance_test(backend: Backend, op: OperatorTestCase, testcase: str):
-    args, kwargs = eval(testcase)
-    op_fn = getattr(getattr(torch.ops.aten, op.op), op.overload)
-    with backend.activate():
-        return triton.testing.do_bench(lambda: op_fn(*args, **kwargs))
+# def run_performance_test(backend: Backend, op: OperatorTestCase, testcase: str):
+#     args, kwargs = eval(testcase)
+#     op_fn = getattr(getattr(torch.ops.aten, op.op), op.overload)
+#     with backend.activate():
+#         return triton.testing.do_bench(lambda: op_fn(*args, **kwargs))
 
-
-OPS = [
-    OperatorTestCase(
-        "relu",
-        "default",
-        [
-            "((torch.randn(1, 1),), {})",
-        ],
-        [
-            "((torch.randn(2**20),), {})",
-        ],
-    )
-]
 
 BACKENDS = [
     AtenBackend(),
 ]
+
 
 @click.command()
 @click.option('--ops', default=None, help='Comma-separated list of operations to test.')
@@ -78,19 +64,25 @@ def main(ops, backends):
     Backend, Op, Overload, Correctness test case, Correctness result, Performance test case, Performance result
 
     Yeah.  And then we can turn that into a dataframe and do whatever we want with it.
-    """
-    if ops:
-        ops = ops.split(',')
-    else:
-        ops = OPS  # Default operation
+    """    
+
+    ops = []
+    for op in op_db:
+        if "." in op.name:
+            continue
+        if torch.float32 not in op.supported_dtypes("cuda"):
+            continue
+        if any(s in op.name for s in ["_softmax_backward_data", "to_sparse", "nonzero_static"]):
+            continue
+        ops.append(op)
 
     if backends:
         backends = backends.split(',')
     else:
         backends = ["default"]  # Default backend
 
-    print(f"Testing operations: {ops}")
-    print(f"Using backends: {backends}")
+    #print(f"Testing operations: {ops}")
+    #print(f"Using backends: {backends}")
 
     # For each backend, for each op, run the correctness and performance tests and record the results in a pandas dataframe.
 
@@ -100,25 +92,25 @@ def main(ops, backends):
 
     # Iterate over each backend and operation
     for backend in BACKENDS:
-        for op in OPS:
-            for correctness_test in op.correctness_tests:
+        for op in ops:
+            print(op.name)
+            for correctness_test in op.sample_inputs("cuda", torch.float32):
                 correctness_result = run_correctness_test(backend, op, correctness_test)
                 correctness_results.append({
                     "backend": backend.name,
-                    "op": op.op,
-                    "overload": op.overload,
-                    "test": correctness_test,
+                    "op": op.name,
+                    "test": str(correctness_test),
                     "result": correctness_result,
                 })
-            for performance_test in op.performance_tests:
-                performance_result = run_performance_test(backend, op, performance_test)
-                performance_results.append({
-                    "backend": backend.name,
-                    "op": op.op,
-                    "overload": op.overload,
-                    "test": performance_test,
-                    "result": performance_result,
-                })
+            # for performance_test in op.performance_tests:
+            #     performance_result = run_performance_test(backend, op, performance_test)
+            #     performance_results.append({
+            #         "backend": backend.name,
+            #         "op": op.op,
+            #         "overload": op.overload,
+            #         "test": performance_test,
+            #         "result": performance_result,
+            #     })
 
 
     # Convert the results into a pandas DataFrame
