@@ -12,6 +12,7 @@ Configuration:
 Before running:
 Make sure you run huggingface-cli login. 
 You may have to authenticate a bunch of models if they end up failing as well (like llama).
+The UI for above isn't the best, I recommend just starting with a small amount of models (ie. 5) and going up as things work
 """
 
 # Configuration
